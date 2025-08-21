@@ -1,0 +1,418 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>AiRez — Bookable Restaurants</title>
+  <link rel="icon" href="logo.png" />
+  <style>
+    :root {
+      --bg: #f7f8fb;
+      --card: #ffffff;
+      --ink: #0f172a;
+      --muted: #6b7280;
+      --line: #eef0f3;
+      --brand: #0A61FF;
+      --radius: 14px;
+      --shadow: 0 10px 30px rgba(2,8,23,.08);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; color: var(--ink); background: var(--bg); }
+    a { color: var(--brand); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    /* Header */
+    .nav {
+      height: 64px; display: flex; align-items: center;
+      padding: 0 18px; background: #fff; border-bottom: 1px solid var(--line);
+    }
+    .nav .brand {
+      display:flex; align-items:center; gap:10px; font-weight:800;
+    }
+    .nav .brand img { width: 28px; height: 28px; border-radius: 6px; }
+
+    main { max-width: 980px; margin: 18px auto 80px; padding: 0 16px; }
+
+    /* HERO with big Rezzie */
+    .hero {
+      display:flex; flex-direction:column; align-items:center; gap:14px;
+      text-align:center; margin: 24px 0 8px;
+    }
+    .hero-logo {
+      width: 220px; height: 220px; object-fit: contain;
+      filter: drop-shadow(0 16px 34px rgba(0,0,0,.12));
+      border-radius: 14px;
+      background: #fff;
+    }
+    h1 {
+      font-size: clamp(28px, 4.2vw, 44px);
+      line-height: 1.14; margin: 0; font-weight: 900; letter-spacing: -0.015em;
+    }
+    .subtitle {
+      color: var(--muted); margin: 0 auto; max-width: 900px;
+      font-size: clamp(14px, 1.9vw, 16px);
+    }
+    .chips { display:flex; flex-wrap:wrap; gap:10px; justify-content:center; margin: 16px 0 22px; }
+    .chip {
+      font-size: 13px; background:#fff; border:1px solid var(--line); padding:8px 12px; border-radius:999px; cursor:default;
+      box-shadow: 0 3px 10px rgba(0,0,0,.03);
+    }
+
+    /* Search card */
+    .panel {
+      background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+      box-shadow: var(--shadow); padding: 14px; margin: 0 auto 18px;
+    }
+    .row {
+      display:grid; gap:10px;
+      grid-template-columns: 1.6fr 110px 160px 140px 180px 110px;
+    }
+    .row > * {
+      height: 42px; padding: 0 12px; border: 1px solid #e4e7ec; border-radius: 10px; outline: none; background:#fff;
+    }
+    .btn {
+      height: 42px; border:0; border-radius: 10px; background:#111; color:#fff; padding:0 16px; font-weight:700; cursor:pointer;
+    }
+    .status { color: var(--muted); font-size: 13px; margin-top: 10px; }
+    #aiNote { margin-top: 12px; color: #333; font-size: 14px; }
+
+    /* Results */
+    #results .card {
+      background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 14px; margin: 12px 0;
+      box-shadow: 0 6px 16px rgba(0,0,0,.04);
+    }
+    .title { font-weight: 800; font-size: 17px; }
+    .muted { color: var(--muted); font-size: 13px; }
+    .links a { margin-right: 12px; font-weight: 600; }
+    .ratingLine { margin: 3px 0 6px; }
+    .badge { display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; background:#f1f5ff; color:#2746ff; margin-left:8px; }
+
+    /* Concierge floating widget */
+    #concierge-btn {
+      position: fixed; right: 18px; bottom: 18px; z-index: 900;
+      background:#111; color:#fff; border:0; border-radius:999px;
+      padding:12px 14px; font-weight:700; cursor:pointer; box-shadow:0 10px 26px rgba(0,0,0,.25);
+    }
+    #concierge-panel {
+      position: fixed; right: 18px; bottom: 72px; z-index: 1000;
+      width: 360px; max-height: 70vh; background:#fff; border:1px solid var(--line); border-radius:14px;
+      display:none; flex-direction: column; overflow: hidden; box-shadow:0 18px 42px rgba(0,0,0,.28);
+    }
+    #concierge-header {
+      padding:10px 12px; font-weight:800; border-bottom:1px solid var(--line);
+      display:flex; align-items:center; justify-content:space-between;
+    }
+    #concierge-chat { padding: 10px 12px; overflow-y:auto; flex:1; }
+    .msg { margin:8px 0; line-height:1.35; }
+    .msg.ai { color:#111; }
+    .msg.me { text-align:right; color:#333; }
+    #handoff-area { display:none; padding:0 12px 12px; }
+    #handoff-area input { width:100%; height:38px; padding:0 10px; border:1px solid #ddd; border-radius:10px; margin:6px 0; }
+    #handoff-btn { width:100%; height:40px; border:1px solid #111; background:#fff; color:#111; border-radius:10px; cursor:pointer; }
+    #concierge-input { display:flex; border-top:1px solid var(--line); }
+    #concierge-input input { flex:1; border:0; padding:12px; outline:none; }
+    #concierge-input button { border:0; background:#111; color:#fff; padding:0 14px; cursor:pointer; }
+
+    @media (max-width: 900px) {
+      .row { grid-template-columns: 1fr 1fr; }
+      .row > * { width:100%; }
+    }
+  </style>
+</head>
+<body>
+  <!-- Top bar -->
+  <div class="nav">
+    <div class="brand">
+      <img src="logo.png" alt="AiRez"/>
+      <span>AiRez</span>
+    </div>
+  </div>
+
+  <main>
+    <!-- BIG REZZIE HERO -->
+    <div class="hero">
+      <img class="hero-logo" src="logo.png" alt="AiRez mascot" />
+      <h1>Real, bookable restaurants — fast</h1>
+      <p class="subtitle">
+        Describe the vibe (“cozy pasta in West Village, 8pm for 2”) and AiRez pulls realistic options with direct booking links.
+      </p>
+    </div>
+
+    <!-- quick ideas -->
+    <div class="chips">
+      <span class="chip">Cozy pasta</span>
+      <span class="chip">Sushi date night</span>
+      <span class="chip">Birthday dinner</span>
+      <span class="chip">Wine bars</span>
+      <span class="chip">Group spot</span>
+    </div>
+
+    <!-- Search panel -->
+    <div class="panel">
+      <div class="row" style="margin-bottom:10px;">
+        <input id="q" placeholder="Restaurant where I can see the Hudson at sunset…" />
+        <input id="party" type="number" min="1" value="2" title="Party size"/>
+        <input id="date" type="date" title="Date"/>
+        <input id="time" type="time" value="20:00" title="Time"/>
+        <select id="where" title="Location">
+          <optgroup label="NYC — Boroughs">
+            <option value="Manhattan" selected>Manhattan</option>
+            <option value="Brooklyn">Brooklyn</option>
+            <option value="Queens">Queens</option>
+            <option value="Bronx">Bronx</option>
+            <option value="Staten Island">Staten Island</option>
+          </optgroup>
+          <optgroup label="Manhattan — Popular Areas">
+            <option value="West Village">West Village</option>
+            <option value="SoHo">SoHo</option>
+            <option value="Lower East Side">Lower East Side</option>
+            <option value="Chelsea">Chelsea</option>
+            <option value="Midtown">Midtown</option>
+            <option value="Upper East Side">Upper East Side</option>
+            <option value="Upper West Side">Upper West Side</option>
+            <option value="FiDi">FiDi / Financial District</option>
+            <option value="East Village">East Village</option>
+          </optgroup>
+        </select>
+        <button id="searchBtn" class="btn">Search</button>
+      </div>
+
+      <label style="font-size:13px; color:#333; display:flex; align-items:center; gap:6px;">
+        <input id="useAi" type="checkbox" checked/>
+        Let Rezzie summarize results first
+      </label>
+
+      <div id="status" class="status"></div>
+      <div id="aiNote"></div>
+    </div>
+
+    <div id="results"></div>
+  </main>
+
+  <!-- Floating Concierge -->
+  <div id="concierge-panel">
+    <div id="concierge-header">
+      <span>AI Concierge</span>
+      <button id="concierge-close" title="Close">×</button>
+    </div>
+    <div id="concierge-chat"></div>
+    <div id="handoff-area">
+      <input id="contact" placeholder="Your email or phone (optional for follow-up)" />
+      <button id="handoff-btn" title="Send this chat to a human specialist">Hand off to human</button>
+    </div>
+    <div id="concierge-input">
+      <input id="concierge-text" placeholder="Hey, I’m Rezzie — tell me what you and your party need."/>
+      <button id="concierge-send">Send</button>
+    </div>
+  </div>
+  <button id="concierge-btn">AI Concierge</button>
+
+  <script>
+    // ====== Endpoints ======
+    const API_BASE  = "http://127.0.0.1:8088";
+    const API_SEARCH = API_BASE + "/live_search";
+    const API_AI     = API_BASE + "/concierge/ai_chat";
+    const API_HANDOFF= API_BASE + "/concierge/handoff";
+
+    const $ = (s) => document.querySelector(s);
+
+    // default date = today
+    (function primeDate(){
+      const d = new Date();
+      const iso = d.toISOString().slice(0,10);
+      $("#date").value = iso;
+    })();
+
+    function ctxFromUI(extra={}) {
+      return {
+        q: $("#q").value.trim(),
+        party: Number($("#party").value || 2),
+        date: $("#date").value || null,
+        time: $("#time").value || "20:00",
+        city: $("#where").value || "Manhattan",
+        ...extra
+      };
+    }
+
+    // ====== Search flow ======
+    async function runSearch() {
+      const ctx = ctxFromUI();
+      const USE_AI_REPLY = $("#useAi").checked;
+
+      $("#status").textContent = "Searching…";
+      $("#aiNote").textContent = "";
+      const t0 = performance.now();
+
+      try {
+        if (USE_AI_REPLY) {
+          try {
+            const aiRes = await fetch(API_AI, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                message: ctx.q || "Help me find a place.",
+                context: { ...ctx }
+              })
+            });
+            const aiData = await aiRes.json();
+            if (aiData && aiData.reply) $("#aiNote").textContent = aiData.reply;
+          } catch {}
+        }
+
+        const res = await fetch(API_SEARCH, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            q: `${ctx.q} in ${ctx.city}`,
+            party_size: ctx.party,
+            date: ctx.date,
+            time: ctx.time,
+            city: ctx.city
+          })
+        });
+        const txt = await res.text();
+        let data;
+        try { data = JSON.parse(txt); }
+        catch { throw new Error("Bad JSON from API: " + txt.slice(0,200)); }
+
+        const dt = ((performance.now() - t0) / 1000).toFixed(1);
+        const items = data.items || data.results || (Array.isArray(data) ? data : []);
+        $("#status").textContent = `Mode: ${data.mode || "live"} • ${items.length} results • ${dt}s`;
+        render(items, ctx);
+      } catch (err) {
+        $("#status").textContent = "";
+        $("#aiNote").textContent = "";
+        $("#results").innerHTML = "";
+        alert(err.message || "Search failed.");
+      }
+    }
+
+    function render(items, ctx) {
+      const root = $("#results");
+      root.innerHTML = "";
+
+      if (!items.length) {
+        root.innerHTML = `
+          <div class='muted'>
+            No matches in ${ctx.city} for that query. Try rewording your request
+            (e.g., “casual pasta”, “sushi omakase”, “private room bar for 50 in FiDi”),
+            or pick a nearby area.
+          </div>`;
+        return;
+      }
+
+      root.innerHTML = items.map(x => {
+        const name = x.name || x.title || "Result";
+        const address = x.address || "";
+        const rating = x.rating ? `⭐ ${x.rating}` : "";
+        const yelp = x.yelp_rating ? ` • Yelp ${x.yelp_rating}` : "";
+        const price = x.price_level ? ` • 💲${x.price_level}` : "";
+
+        const links = [];
+        if (x.links?.opentable)   links.push(`<a href="${x.links.opentable}" target="_blank" rel="noopener noreferrer">OpenTable</a>`);
+        if (x.links?.resy)        links.push(`<a href="${x.links.resy}" target="_blank" rel="noopener noreferrer">Resy</a>`);
+        if (x.links?.google_maps) links.push(`<a href="${x.links.google_maps}" target="_blank" rel="noopener noreferrer">Google Maps</a>`);
+        if (x.yelp_url)           links.push(`<a href="${x.yelp_url}" target="_blank" rel="noopener noreferrer">Yelp</a>`);
+
+        return `
+          <div class="card">
+            <div class="title">${name}${x._hotspot ? `<span class="badge">hype-prone</span>` : ""}</div>
+            <div class="ratingLine">${rating}${yelp}${price}${x.yelp_price ? ` • ${x.yelp_price}` : ""}</div>
+            <div class="muted">${address}</div>
+            <div class="links" style="margin-top:8px;">${links.join(" | ") || "<span class='muted'>No links found</span>"}</div>
+          </div>
+        `;
+      }).join("");
+    }
+
+    $("#searchBtn").addEventListener("click", runSearch);
+    document.addEventListener("keydown", (e) => { if (e.key === "Enter") runSearch(); });
+
+    // ====== Concierge widget ======
+    const panel  = $("#concierge-panel");
+    const chatEl = $("#concierge-chat");
+    const input  = $("#concierge-text");
+    const sendBtn= $("#concierge-send");
+    const openBtn= $("#concierge-btn");
+    const closeBtn=$("#concierge-close");
+    const handoffArea = $("#handoff-area");
+    const handoffBtn  = $("#handoff-btn");
+    const contactEl   = $("#contact");
+
+    const transcript = []; // {role:'user'|'assistant', text, at}
+
+    function addMsg(text, who="ai") {
+      const div = document.createElement("div");
+      div.className = `msg ${who}`;
+      div.textContent = text;
+      chatEl.appendChild(div);
+      chatEl.scrollTop = chatEl.scrollHeight;
+    }
+
+    function showPanel() {
+      panel.style.display = "flex";
+      if (!chatEl.dataset.init) {
+        addMsg("Hey, I’m Rezzie — tell me what you and your party are looking for. I’d love to help!");
+        chatEl.dataset.init = "1";
+      }
+      input.focus();
+    }
+    function hidePanel() { panel.style.display = "none"; }
+
+    async function send() {
+      const text = (input.value || "").trim();
+      if (!text) return;
+      addMsg(text, "me");
+      transcript.push({ role:"user", text, at: Date.now() });
+      input.value = "";
+
+      try {
+        const ctx = ctxFromUI();
+        const res = await fetch(API_AI, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message: text, context: ctx })
+        });
+        const data = await res.json();
+
+        addMsg(data.reply || "…", "ai");
+        transcript.push({ role:"assistant", text: data.reply || "", at: Date.now() });
+
+        if (data.escalate || data.can_escalate) {
+          handoffArea.style.display = "block";
+        }
+      } catch (e) {
+        addMsg("Oops — I couldn’t reach the concierge. Try again in a moment.", "ai");
+      }
+    }
+
+    async function handoff() {
+      const ctx = ctxFromUI({ contact: (contactEl.value || "").trim() || null });
+      try {
+        const res = await fetch(API_HANDOFF, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ transcript, context: ctx })
+        });
+        const data = await res.json();
+        if (data.ok) {
+          addMsg("Great — I’m handing this to a human specialist now. We’ll follow up shortly.", "ai");
+          handoffArea.style.display = "none";
+        } else {
+          addMsg("Couldn’t hand off right now. I’ll keep helping meanwhile.", "ai");
+        }
+      } catch {
+        addMsg("Couldn’t reach handoff service.", "ai");
+      }
+    }
+
+    openBtn.addEventListener("click", showPanel);
+    closeBtn.addEventListener("click", hidePanel);
+    sendBtn.addEventListener("click", send);
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
+    handoffBtn.addEventListener("click", handoff);
+  </script>
+</body>
+</html>
+
