@@ -209,11 +209,15 @@
   <button id="concierge-btn">AI Concierge</button>
 
   <script>
-    // ====== Endpoints ======
-    const API_BASE  = "http://127.0.0.1:8088";
-    const API_SEARCH = API_BASE + "/live_search";
-    const API_AI     = API_BASE + "/concierge/ai_chat";
-    const API_HANDOFF= API_BASE + "/concierge/handoff";
+    // ====== Endpoints (works locally & on Render) ======
+    const API_BASE =
+      (location.hostname === "localhost" || location.hostname === "127.0.0.1")
+        ? "http://127.0.0.1:8088"
+        : ""; // same-origin on Render
+
+    const API_SEARCH  = API_BASE + "/live_search";
+    const API_AI      = API_BASE + "/concierge/ai_chat";
+    const API_HANDOFF = API_BASE + "/concierge/handoff";
 
     const $ = (s) => document.querySelector(s);
 
@@ -366,52 +370,50 @@
       addMsg(text, "me");
       transcript.push({ role:"user", text, at: Date.now() });
       input.value = "";
-
       try {
-        const ctx = ctxFromUI();
         const res = await fetch(API_AI, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message: text, context: ctx })
+          method:"POST",
+          headers:{"Content-Type":"application/json"},
+          body: JSON.stringify({
+            message:text,
+            context: ctxFromUI(),
+            transcript
+          })
         });
         const data = await res.json();
-
-        addMsg(data.reply || "…", "ai");
-        transcript.push({ role:"assistant", text: data.reply || "", at: Date.now() });
-
-        if (data.escalate || data.can_escalate) {
-          handoffArea.style.display = "block";
+        if (data.reply) {
+          addMsg(data.reply, "ai");
+          transcript.push({ role:"assistant", text:data.reply, at:Date.now() });
+          if (data.handoff) handoffArea.style.display = "block";
         }
-      } catch (e) {
-        addMsg("Oops — I couldn’t reach the concierge. Try again in a moment.", "ai");
+      } catch {
+        addMsg("Sorry — network issue, try again in a sec.", "ai");
       }
     }
 
-    async function handoff() {
-      const ctx = ctxFromUI({ contact: (contactEl.value || "").trim() || null });
+    async function doHandoff() {
       try {
-        const res = await fetch(API_HANDOFF, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ transcript, context: ctx })
+        await fetch(API_HANDOFF, {
+          method:"POST",
+          headers:{"Content-Type":"application/json"},
+          body: JSON.stringify({
+            context: ctxFromUI(),
+            transcript,
+            contact: contactEl.value || null
+          })
         });
-        const data = await res.json();
-        if (data.ok) {
-          addMsg("Great — I’m handing this to a human specialist now. We’ll follow up shortly.", "ai");
-          handoffArea.style.display = "none";
-        } else {
-          addMsg("Couldn’t hand off right now. I’ll keep helping meanwhile.", "ai");
-        }
+        addMsg("Got it! One of our human concierges will reach out soon.", "ai");
+        handoffArea.style.display = "none";
       } catch {
-        addMsg("Couldn’t reach handoff service.", "ai");
+        addMsg("Something went wrong sending your chat to a human. Try again later.", "ai");
       }
     }
 
     openBtn.addEventListener("click", showPanel);
     closeBtn.addEventListener("click", hidePanel);
     sendBtn.addEventListener("click", send);
-    input.addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
-    handoffBtn.addEventListener("click", handoff);
+    input.addEventListener("keydown", (e)=>{ if(e.key==="Enter") send(); });
+    handoffBtn.addEventListener("click", doHandoff);
   </script>
 </body>
 </html>
