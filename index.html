@@ -23,9 +23,14 @@
     .btn{height:42px;border:0;border-radius:10px;background:#111;color:#fff;padding:0 16px;font-weight:700;cursor:pointer}
     .status{color:var(--muted);font-size:13px;margin-top:10px} #aiNote{margin-top:12px;color:#333;font-size:14px}
 
-    #tabs{display:flex;gap:10px;margin:6px 0 12px}
+    #tabs{display:flex;gap:10px;margin:6px 0 8px}
     .tab{padding:8px 12px;border-radius:999px;border:1px solid var(--line);background:#fff;color:#111;font-weight:700;cursor:pointer}
     .tab.active{background:#0A61FF;color:#fff;border-color:#0A61FF}
+
+    #quickActions{display:flex;gap:10px;align-items:center;margin:8px 0 0}
+    #askConcierge{padding:8px 12px;border-radius:999px;border:1px solid #111;background:#fff;color:#111;font-weight:700;cursor:pointer}
+    #askConcierge:hover{background:#111;color:#fff}
+    #useAiLbl{font-size:13px;color:#333;display:flex;align-items:center;gap:6px}
 
     #results .card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px;margin:12px 0;box-shadow:0 6px 16px rgba(0,0,0,.04)}
     .title{font-weight:800;font-size:17px}.muted{color:var(--muted);font-size:13px}.links a{margin-right:12px;font-weight:600}.ratingLine{margin:3px 0 6px}.badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;background:#f1f5ff;color:#2746ff;margin-left:8px}
@@ -39,6 +44,29 @@
     .photosRow::-webkit-scrollbar{height:8px}.photosRow::-webkit-scrollbar-thumb{background:#e1e5ec;border-radius:999px}
     .photoCell{scroll-snap-align:start;width:180px;height:120px;border-radius:10px;overflow:hidden;background:#f3f4f6}
     .photoCell img{width:100%;height:100%;object-fit:cover;display:block}
+
+    /* Concierge floating widget */
+    #concierge-btn {
+      position: fixed; right: 18px; bottom: 18px; z-index: 900;
+      background:#111; color:#fff; border:0; border-radius:999px;
+      padding:12px 14px; font-weight:700; cursor:pointer; box-shadow:0 10px 26px rgba(0,0,0,.25);
+    }
+    #concierge-panel {
+      position: fixed; right: 18px; bottom: 72px; z-index: 1000;
+      width: 360px; max-height: 70vh; background:#fff; border:1px solid var(--line); border-radius:14px;
+      display:none; flex-direction: column; overflow: hidden; box-shadow:0 18px 42px rgba(0,0,0,.28);
+    }
+    #concierge-header { padding:10px 12px; font-weight:800; border-bottom:1px solid var(--line); display:flex; align-items:center; justify-content:space-between; }
+    #concierge-chat { padding: 10px 12px; overflow-y:auto; flex:1; }
+    .msg { margin:8px 0; line-height:1.35; }
+    .msg.ai { color:#111; }
+    .msg.me { text-align:right; color:#333; }
+    #handoff-area { display:none; padding:0 12px 12px; }
+    #handoff-area input { width:100%; height:38px; padding:0 10px; border:1px solid #ddd; border-radius:10px; margin:6px 0; }
+    #handoff-btn { width:100%; height:40px; border:1px solid #111; background:#fff; color:#111; border-radius:10px; cursor:pointer; }
+    #concierge-input { display:flex; border-top:1px solid var(--line); }
+    #concierge-input input { flex:1; border:0; padding:12px; outline:none; }
+    #concierge-input button { border:0; background:#111; color:#fff; padding:0 14px; cursor:pointer; }
 
     @media (max-width:900px){.row{grid-template-columns:1fr 1fr}.row>*{width:100%}}
   </style>
@@ -79,9 +107,10 @@
         <button id="tab-verified" class="tab">Verified Recommendations</button>
       </div>
 
-      <label style="font-size:13px;color:#333;display:flex;align-items:center;gap:6px;">
-        <input id="useAi" type="checkbox" checked/> Let Rezzie summarize results first
-      </label>
+      <div id="quickActions">
+        <button id="askConcierge" title="Chat with Rezzie">Ask Concierge</button>
+        <label id="useAiLbl"><input id="useAi" type="checkbox" checked/> Let Rezzie summarize results first</label>
+      </div>
 
       <div id="status" class="status"></div>
       <div id="aiNote"></div>
@@ -91,31 +120,46 @@
     <div id="loadMoreWrap"><button id="loadMore">Load more</button></div>
   </main>
 
-  <!-- Concierge (unchanged UI omitted for brevity) -->
-  <div id="concierge-panel" style="display:none;"></div>
-  <button id="concierge-btn" style="display:none;">AI Concierge</button>
+  <!-- Floating Concierge -->
+  <div id="concierge-panel">
+    <div id="concierge-header">
+      <span>AI Concierge</span>
+      <button id="concierge-close" title="Close">×</button>
+    </div>
+    <div id="concierge-chat"></div>
+    <div id="handoff-area">
+      <input id="contact" placeholder="Your email or phone (optional for follow-up)" />
+      <button id="handoff-btn" title="Send this chat to a human specialist">Hand off to human</button>
+    </div>
+    <div id="concierge-input">
+      <input id="concierge-text" placeholder="Hey, I’m Rezzie — tell me what you and your party need."/>
+      <button id="concierge-send">Send</button>
+    </div>
+  </div>
+  <button id="concierge-btn">AI Concierge</button>
 
   <script>
+    // ====== Endpoints ======
     const API_BASE = (location.hostname === "localhost" || location.hostname === "127.0.0.1") ? "http://127.0.0.1:8088" : "";
     const API_CURSOR = API_BASE + "/api/search";
     const API_AI     = API_BASE + "/concierge/ai_chat";
+    const API_HANDOFF= API_BASE + "/concierge/handoff";
     const $ = (s)=>document.querySelector(s);
 
     // defaults
     (function primeDate(){ const d=new Date(); $("#date").value=d.toISOString().slice(0,10); })();
 
+    // state
     let cursor=null, isLoading=false, lastQuery="", lastCity="Manhattan", currentTab="ai";
 
+    // Tabs
     $("#tab-ai").onclick = ()=> switchTab("ai");
     $("#tab-verified").onclick = ()=> switchTab("verified");
-
     function switchTab(tab){
       currentTab = tab;
       $("#tab-ai").classList.toggle("active", tab==="ai");
       $("#tab-verified").classList.toggle("active", tab==="verified");
-      cursor=null;
-      clearResults();
-      runSearch();
+      cursor=null; clearResults(); runSearch();
     }
 
     function ctxFromUI(){ return {
@@ -126,6 +170,7 @@
       city: $("#where").value || "Manhattan"
     }; }
 
+    // Search
     $("#searchBtn").addEventListener("click", () => { const ctx=ctxFromUI(); lastQuery=ctx.q; lastCity=ctx.city; cursor=null; runSearch(); });
     document.addEventListener("keydown", (e)=>{ if(e.key==="Enter"){ const ctx=ctxFromUI(); lastQuery=ctx.q; lastCity=ctx.city; cursor=null; runSearch(); }});
     $("#loadMore").addEventListener("click", ()=> loadBatch(false));
@@ -136,6 +181,8 @@
 
       $("#status").textContent = "Searching…";
       $("#aiNote").textContent = "";
+
+      // optional AI blurb
       if ($("#useAi").checked && currentTab==="ai") {
         try {
           const aiRes = await fetch(API_AI, { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ message: ctx.q || "Help me find a place.", context: ctx })});
@@ -208,8 +255,81 @@
     }
 
     function escapeHtml(s){ return String(s||'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#039;'); }
+
+    // ====== Concierge widget ======
+    const panel  = $("#concierge-panel");
+    const chatEl = $("#concierge-chat");
+    const input  = $("#concierge-text");
+    const sendBtn= $("#concierge-send");
+    const openBtn= $("#concierge-btn");
+    const closeBtn=$("#concierge-close");
+    const handoffArea = $("#handoff-area");
+    const handoffBtn  = $("#handoff-btn");
+    const contactEl   = $("#contact");
+    const transcript  = [];
+
+    function addMsg(text, who="ai") {
+      const div = document.createElement("div");
+      div.className = `msg ${who}`;
+      div.textContent = text;
+      chatEl.appendChild(div);
+      chatEl.scrollTop = chatEl.scrollHeight;
+    }
+    function showPanel() {
+      panel.style.display = "flex";
+      if (!chatEl.dataset.init) {
+        addMsg("Hey, I’m Rezzie — tell me what you and your party are looking for. I’d love to help!");
+        chatEl.dataset.init = "1";
+      }
+      input.focus();
+    }
+    function hidePanel() { panel.style.display = "none"; }
+
+    async function send() {
+      const text = (input.value || "").trim();
+      if (!text) return;
+      addMsg(text, "me");
+      transcript.push({ role:"user", text, at: Date.now() });
+      input.value = "";
+      try {
+        const res = await fetch(API_AI, {
+          method:"POST",
+          headers:{"Content-Type":"application/json"},
+          body: JSON.stringify({ message:text, context: ctxFromUI(), transcript })
+        });
+        const data = await res.json();
+        if (data.reply) {
+          addMsg(data.reply, "ai");
+          transcript.push({ role:"assistant", text:data.reply, at:Date.now() });
+          if (data.handoff) handoffArea.style.display = "block";
+        }
+      } catch {
+        addMsg("Sorry — network issue, try again in a sec.", "ai");
+      }
+    }
+    async function doHandoff() {
+      try {
+        await fetch(API_HANDOFF, {
+          method:"POST",
+          headers:{"Content-Type":"application/json"},
+          body: JSON.stringify({ context: ctxFromUI(), transcript, contact: contactEl.value || null })
+        });
+        addMsg("Got it! One of our human concierges will reach out soon.", "ai");
+        handoffArea.style.display = "none";
+      } catch {
+        addMsg("Something went wrong sending your chat to a human. Try again later.", "ai");
+      }
+    }
+
+    openBtn.addEventListener("click", showPanel);
+    closeBtn.addEventListener("click", hidePanel);
+    sendBtn.addEventListener("click", send);
+    input.addEventListener("keydown", (e)=>{ if(e.key==="Enter") send(); });
+
+    // NEW: “Ask Concierge” pill triggers the same open action
+    $("#askConcierge").addEventListener("click", showPanel);
+
+    handoffBtn.addEventListener("click", doHandoff);
   </script>
 </body>
 </html>
-
-
