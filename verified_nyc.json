@@ -1,0 +1,22 @@
+[
+  {
+    "name": "L'Isola Trattoria",
+    "address": "123 West 4th St, New York, NY",
+    "area": "West Village",
+    "admin_rating": 4.8,
+    "price_level": 2,
+    "blurb": "Cozy trattoria with handmade pasta; perfect for date night.",
+    "tags": ["cozy", "pasta", "date-night"],
+    "recommend": ["Spaghetti alla chitarra", "Lemon ricotta cheesecake"],
+    "reviewer": "Admin: Chris D.",
+    "photos": [
+      "https://images.unsplash.com/photo-1504674900247-0877df9cc836",
+      "https://images.unsplash.com/photo-1526318472351-c75fcf070305"
+    ],
+    "website": "",
+    "maps_url": "",
+    "yelp_url": "",
+    "yelp_rating": 4.6,
+    "yelp_review_count": 820
+  }
+]

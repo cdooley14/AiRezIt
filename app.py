@@ -1,4 +1,4 @@
-# app.py — AiRez (Serve index.html + Live Search + Concierge AI + Cursor-based pagination)
+# app.py — AiRez (Serve index.html + Live Search + Concierge AI + Cursor pagination + Verified Tab)
 import os
 import json
 import re
@@ -35,12 +35,14 @@ N8N_WEBHOOK: str = os.getenv("N8N_CONCIERGE_WEBHOOK", "")  # optional
 
 DEFAULT_CITY: str = os.getenv("AIREZ_DEFAULT_CITY", "New York")
 DEFAULT_METRO: str = os.getenv("AIREZ_DEFAULT_METRO", "NYC")
+VERIFIED_FILE: str = os.getenv("AIREZ_VERIFIED_FILE", "verified_nyc.json")  # << new
+
 try:
     DEFAULT_COVERS: int = int(os.getenv("AIREZ_DEFAULT_COVERS", "2"))
 except ValueError:
     DEFAULT_COVERS = 2
 
-PAGE_SIZE = 10  # number returned per "page" for load more
+PAGE_SIZE = 10  # results per page
 
 # OpenAI client (for concierge)
 _openai_client = OpenAI(api_key=OPENAI_API_KEY) if (OPENAI_API_KEY and OpenAI) else None
@@ -52,7 +54,7 @@ app = FastAPI(title="AiRez")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],    # fine for local + ngrok
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -71,7 +73,6 @@ class Query(BaseModel):
 # Helpers
 # -------------------------------------------------------------------
 def safe_dt(date_str: Optional[str], time_str: Optional[str]) -> datetime:
-    """Return a datetime from YYYY-MM-DD and HH:MM; default today 20:00."""
     try:
         if date_str and time_str:
             return datetime.fromisoformat(f"{date_str}T{time_str}")
@@ -98,13 +99,7 @@ def resy_city_code(city: Optional[str]) -> str:
     return m.get((city or "").lower(), "ny")
 
 def _opentable_search_link(name: str, dt_iso: str, covers: int, city_term: str) -> str:
-    params = {
-        "covers": covers,
-        "datetime": dt_iso,  # 'YYYY-MM-DDTHH:MM'
-        "term": name,
-        "currentview": "list",
-        "q": f"{name} {city_term}",
-    }
+    params = {"covers": covers, "datetime": dt_iso, "term": name, "currentview": "list", "q": f"{name} {city_term}"}
     return "https://www.opentable.com/s?" + urllib.parse.urlencode(params)
 
 def _resy_search_link(name: str, date_str: str, time_str: str, covers: int, city: str) -> str:
@@ -121,11 +116,8 @@ def build_links(name: str, dt: datetime, covers: int, city_term: str = "New York
         "google_maps": f"https://www.google.com/maps/search/{urllib.parse.quote(name + ' ' + city_term)}",
     }
 
+AIREZ_HOTSPOT_AVOID = {"carbone", "l'artusi", "via carota", "i sodi", "don angie", "raoul's", "lucali"}
 def _is_hotspot(name: str) -> bool:
-    AIREZ_HOTSPOT_AVOID = {
-        "carbone", "l'artusi", "via carota", "i sodi", "don angie",
-        "raoul's", "lucali",
-    }
     n = (name or "").strip().lower()
     return any(hs in n for hs in AIREZ_HOTSPOT_AVOID)
 
@@ -140,7 +132,6 @@ def _dedupe_key(name: str, address: str = "") -> str:
     return hashlib.sha1(f"{(name or '').strip().lower()}|{(address or '').strip().lower()}".encode()).hexdigest()
 
 def _score_item(e: Dict[str, Any]) -> float:
-    # rating + reviews boost + small jitter
     g = float(e.get("rating") or 0)
     y = float(e.get("yelp_rating") or 0)
     rc = float(e.get("reviews") or 0) + float(e.get("yelp_review_count") or 0)
@@ -154,7 +145,7 @@ def _merge_rank_dedupe(groups: List[List[Dict[str, Any]]], seen: set) -> List[Di
     for grp in groups:
         for e in grp:
             k = _dedupe_key(e.get("name",""), e.get("address",""))
-            if k in seen: 
+            if k in seen:
                 continue
             seen.add(k)
             e["_score"] = _score_item(e)
@@ -163,13 +154,20 @@ def _merge_rank_dedupe(groups: List[List[Dict[str, Any]]], seen: set) -> List[Di
     return out
 
 # -------------------------------------------------------------------
-# Google & Yelp (your existing funcs, plus paged Google search)
+# Google photo helper
+# -------------------------------------------------------------------
+def google_photo_url(photo_ref: str, max_w: int = 640) -> str:
+    if not GOOGLE_KEY or not photo_ref:
+        return ""
+    return (
+        "https://maps.googleapis.com/maps/api/place/photo"
+        f"?maxwidth={max_w}&photo_reference={photo_ref}&key={GOOGLE_KEY}"
+    )
+
+# -------------------------------------------------------------------
+# Google & Yelp (paged)
 # -------------------------------------------------------------------
 def google_text_search(query: str, pagetoken: Optional[str] = None) -> Dict[str, Any]:
-    """
-    Returns raw JSON from Google Text Search.
-    Supports pagetoken for pagination.
-    """
     url = "https://maps.googleapis.com/maps/api/place/textsearch/json"
     params = {"key": GOOGLE_KEY, "type": "restaurant"}
     if pagetoken:
@@ -180,21 +178,7 @@ def google_text_search(query: str, pagetoken: Optional[str] = None) -> Dict[str,
     r.raise_for_status()
     return r.json()
 
-def google_place_details(place_id: str) -> Dict[str, Any]:
-    url = "https://maps.googleapis.com/maps/api/place/details/json"
-    params = {
-        "place_id": place_id,
-        "fields": "place_id,name,formatted_address,website,url,price_level,rating,user_ratings_total",
-        "key": GOOGLE_KEY,
-    }
-    r = requests.get(url, params=params, timeout=15)
-    r.raise_for_status()
-    return r.json().get("result", {})
-
 def yelp_search(term: str, location: str, limit: int = 10, offset: int = 0) -> Dict[str, Any]:
-    """
-    Returns raw Yelp JSON with businesses + total etc.
-    """
     url = "https://api.yelp.com/v3/businesses/search"
     headers = {"Authorization": f"Bearer {YELP_KEY}"}
     params = {"term": term, "location": location, "limit": limit, "offset": offset, "categories": "restaurants"}
@@ -256,18 +240,19 @@ def fetch_yelp_chunk(q: str, city: str, want: int, offset: int) -> Dict[str, Any
             (b.get("location") or {}).get("city",""),
             (b.get("location") or {}).get("state",""),
         ]))
+        photos = [b.get("image_url")] if b.get("image_url") else []
         e = {
             "name": name,
             "address": addr,
             "rating": b.get("rating"),
             "reviews": b.get("review_count"),
-            "price_level": None,  # Yelp returns price like "$$" if needed
+            "price_level": None,
             "website": b.get("url"),
             "maps_url": "",
             "yelp_rating": b.get("rating"),
             "yelp_review_count": b.get("review_count"),
             "yelp_url": b.get("url"),
-            "photos": [b.get("image_url")] if b.get("image_url") else [],
+            "photos": [p for p in photos if p],
             "source": "yelp",
             "_hotspot": _is_hotspot(name),
         }
@@ -279,7 +264,6 @@ def fetch_yelp_chunk(q: str, city: str, want: int, offset: int) -> Dict[str, Any
 
 def fetch_places_chunk(q: str, city: str, next_token: Optional[str]) -> Dict[str, Any]:
     if AIREZ_USE_MOCK or not GOOGLE_KEY:
-        # simulate pages of 20
         page_index = int(next_token) if (next_token and next_token.isdigit()) else 0
         items = _mock_chunk(page_index * 20, 20, "places", city)
         pages_total = 3
@@ -287,11 +271,9 @@ def fetch_places_chunk(q: str, city: str, next_token: Optional[str]) -> Dict[str
         has_more = new_index < pages_total
         return {"items": items, "next_token": str(new_index) if has_more else None, "done": not has_more}
 
-    # Google Text Search: first call by query, subsequent by pagetoken
     try:
         raw = google_text_search(f"{q} in {city}", pagetoken=next_token)
-    except requests.HTTPError as e:
-        # If next_page_token not ready, Google can return INVALID_REQUEST; treat as done
+    except requests.HTTPError:
         return {"items": [], "next_token": None, "done": True}
 
     results = raw.get("results", [])
@@ -300,11 +282,13 @@ def fetch_places_chunk(q: str, city: str, next_token: Optional[str]) -> Dict[str
     for r in results:
         name = r.get("name","")
         address = r.get("formatted_address","")
+        photo_refs = [p.get("photo_reference") for p in (r.get("photos") or [])]
+        photos = [google_photo_url(ref, 640) for ref in photo_refs[:6] if ref]
         details = {
             "rating": r.get("rating"),
             "reviews": r.get("user_ratings_total"),
             "price_level": r.get("price_level"),
-            "website": "",  # detail call optional to keep it fast
+            "website": "",
             "maps_url": f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote(name + ' ' + city)}",
         }
         e = {
@@ -314,7 +298,7 @@ def fetch_places_chunk(q: str, city: str, next_token: Optional[str]) -> Dict[str
             "yelp_rating": None,
             "yelp_review_count": None,
             "yelp_url": "",
-            "photos": [],  # you can add photo refs if desired
+            "photos": photos,
             "source": "places",
             "_hotspot": _is_hotspot(name),
         }
@@ -323,60 +307,111 @@ def fetch_places_chunk(q: str, city: str, next_token: Optional[str]) -> Dict[str
     return {"items": items, "next_token": token, "done": done}
 
 # -------------------------------------------------------------------
-# Unified Cursor Search API (NEW)
+# Verified data (admin curated)
+# -------------------------------------------------------------------
+def load_verified() -> List[Dict[str, Any]]:
+    if not os.path.exists(VERIFIED_FILE):
+        return []
+    with open(VERIFIED_FILE, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    # Normalize minimal fields
+    out = []
+    for r in data:
+        e = {
+            "name": r.get("name",""),
+            "address": r.get("address",""),
+            "rating": r.get("admin_rating"),      # surface admin score as main rating
+            "reviews": r.get("review_count", 0),
+            "price_level": r.get("price_level"),  # 1-4 (we'll render as $…)
+            "website": r.get("website",""),
+            "maps_url": r.get("maps_url",""),
+            "yelp_rating": r.get("yelp_rating"),
+            "yelp_review_count": r.get("yelp_review_count"),
+            "yelp_url": r.get("yelp_url"),
+            "photos": r.get("photos", []),
+            "source": "verified",
+            "_hotspot": False,
+            "verified": True,
+            "admin_blurb": r.get("blurb",""),
+            "admin_area": r.get("area",""),
+            "admin_reviewer": r.get("reviewer",""),
+            "admin_tags": r.get("tags", []),
+            "admin_recs": r.get("recommend", []),
+        }
+        out.append(e)
+    return out
+
+VERIFIED_CACHE: List[Dict[str, Any]] = load_verified()
+
+def search_verified(city: str, q: str, offset: int) -> Dict[str, Any]:
+    # very simple filter: city/area + name/tags contains any word from q
+    tokens = [t.strip().lower() for t in re.split(r"[,\s]+", q or "") if t.strip()]
+    def match(item):
+        if city and city.lower() not in (item.get("admin_area","") + " " + item.get("address","")).lower():
+            # allow if city not specified in file; otherwise loose match on area/address
+            pass
+        hay = " ".join([
+            item.get("name",""),
+            item.get("admin_area",""),
+            " ".join(item.get("admin_tags",[])),
+            item.get("admin_blurb","")
+        ]).lower()
+        return all(tok in hay for tok in tokens) if tokens else True
+
+    filtered = [e for e in VERIFIED_CACHE if match(e)]
+    total = len(filtered)
+    page = filtered[offset: offset + PAGE_SIZE]
+    next_offset = offset + len(page)
+    done = next_offset >= total
+    return {"items": page, "next_offset": None if done else next_offset, "done": done}
+
+# -------------------------------------------------------------------
+# Unified Cursor Search API
 # -------------------------------------------------------------------
 @app.get("/api/search")
 def unified_search(
-    q: str = FQuery(..., description="Search text, e.g. 'cozy pasta, West Village, 8pm'"),
-    city: str = FQuery(DEFAULT_CITY, description="City to bias search"),
-    cursor: Optional[str] = FQuery(None, description="Opaque cursor from previous response")
+    q: str = FQuery(..., description="Search text"),
+    city: str = FQuery(DEFAULT_CITY, description="City"),
+    cursor: Optional[str] = FQuery(None, description="Opaque cursor"),
+    tab: str = FQuery("ai", description="ai | verified")   # << new
 ) -> Dict[str, Any]:
     """
     Returns:
-      {
-        "items": [ up to PAGE_SIZE ],
-        "cursor": "<base64 or null>",
-        "has_more": true/false
-      }
-    Cursor encodes source state:
-      {
-        "q": "...",
-        "city": "...",
-        "yelp_offset": int,
-        "yelp_done": bool,
-        "places_token": str|None,
-        "places_done": bool,
-        "seen": [hashes]
-      }
+      { "items":[...], "cursor":str|None, "has_more":bool }
     """
+    # VERIFIED TAB: serve from local curated list with offset
+    if tab == "verified":
+        # read state or init
+        if cursor:
+            st = _b64d(cursor)
+            offset = int(st.get("verified_offset", 0))
+        else:
+            offset = 0
+        res = search_verified(city, q, offset)
+        # add links
+        dt = safe_dt(None, None)
+        for e in res["items"]:
+            e["links"] = build_links(e.get("name",""), dt, DEFAULT_COVERS, city_term=city)
+        has_more = not res["done"]
+        next_state = {"tab":"verified", "q":q, "city":city, "verified_offset": res.get("next_offset") or 0}
+        return {
+            "items": res["items"],
+            "cursor": _b64e(next_state) if has_more and res["items"] else None,
+            "has_more": has_more
+        }
+
+    # AI TAB: multi-source with Yelp/Places cursor
     if cursor:
         state = _b64d(cursor)
     else:
         state = {
-            "q": q,
-            "city": city,
-            "yelp_offset": 0,
-            "yelp_done": False,
-            "places_token": None,
-            "places_done": False,
-            "seen": [],
-        }
-
-    # If query or city changed on a fresh call, reset state
-    if not cursor and (state.get("q") != q or state.get("city") != city):
-        state = {
-            "q": q,
-            "city": city,
-            "yelp_offset": 0,
-            "yelp_done": False,
-            "places_token": None,
-            "places_done": False,
-            "seen": [],
+            "q": q, "city": city,
+            "yelp_offset": 0, "yelp_done": False,
+            "places_token": None, "places_done": False,
+            "seen": [], "tab": "ai"
         }
 
     seen = set(state.get("seen", []))
-
-    # Pull slightly more than one page from each source to have room to merge & dedupe
     want_each = PAGE_SIZE * 2
 
     y_items: List[Dict[str, Any]] = []
@@ -397,41 +432,31 @@ def unified_search(
         else:
             state["places_token"] = pres.get("next_token")
 
-    # Merge, rank, dedupe
     merged = _merge_rank_dedupe([y_items, p_items], seen)
 
-    # Add booking/helper links
     dt = safe_dt(None, None)
     for e in merged:
         e["links"] = build_links(e.get("name",""), dt, DEFAULT_COVERS, city_term=state["city"])
 
-    # Page + update seen
     page = merged[:PAGE_SIZE]
     for e in page:
         seen.add(_dedupe_key(e.get("name",""), e.get("address","")))
 
-    state["seen"] = list(list(seen)[-120:])  # cap to keep cursor small
+    state["seen"] = list(list(seen)[-120:])
     has_more_sources = not (state["yelp_done"] and state["places_done"])
     has_more_page = len(merged) > PAGE_SIZE or has_more_sources
     next_cursor = _b64e(state) if (has_more_page and len(page) > 0) else None
 
-    return {
-        "items": page,
-        "cursor": next_cursor,
-        "has_more": bool(next_cursor)
-    }
+    return {"items": page, "cursor": next_cursor, "has_more": bool(next_cursor)}
 
 # -------------------------------------------------------------------
-# Live Search API (kept as-is from your code)
+# Live Search API (unchanged: quick 10 mixed)
 # -------------------------------------------------------------------
 @app.post("/live_search")
 def live_search(query: Query) -> Dict[str, Any]:
-    # Quick mock mode (for wiring UI)
     if AIREZ_USE_MOCK:
         dt = safe_dt(query.date, query.time)
-        sample_names = [
-            "L'Artusi", "Via Carota", "I Sodi", "Don Angie", "Westville Hudson",
-        ]
+        sample_names = ["L'Artusi","Via Carota","I Sodi","Don Angie","Westville Hudson"]
         items: List[Dict[str, Any]] = []
         for i, name in enumerate(sample_names):
             e = {
@@ -447,7 +472,6 @@ def live_search(query: Query) -> Dict[str, Any]:
             e["yelp_url"] = f"https://www.yelp.com/search?find_desc={urllib.parse.quote(name)}&find_loc={urllib.parse.quote(query.city or 'New York')}"
             e["_hotspot"] = _is_hotspot(name)
             items.append(e)
-
         def score_mock(e):
             base = (e.get("rating", 0) or 0) * (1 + (e.get("reviews", 0) / 500.0))
             if e.get("_hotspot"): base -= 4.0
@@ -455,18 +479,17 @@ def live_search(query: Query) -> Dict[str, Any]:
         ranked = sorted(items, key=score_mock, reverse=True)
         return {"mode": "mock", "items": ranked, "count": len(ranked)}
 
-    # Real mode
     if not (GOOGLE_KEY and YELP_KEY):
         raise HTTPException(status_code=400, detail="Missing API keys. Set GOOGLE_PLACES_API_KEY and YELP_API_KEY, or set AIREZ_USE_MOCK=true.")
 
     dt = safe_dt(query.date, query.time)
-
-    # 1) Google Places text search
     g_raw = google_text_search(f"{query.q} in {query.city}")
     g_results = g_raw.get("results", [])
     top: List[Dict[str, Any]] = []
     for r in g_results[:10]:
         name = r.get("name") or ""
+        photo_refs = [p.get("photo_reference") for p in (r.get("photos") or [])]
+        photos = [google_photo_url(ref, 640) for ref in photo_refs[:6] if ref]
         entry: Dict[str, Any] = {
             "name": name,
             "address": r.get("formatted_address", ""),
@@ -475,17 +498,15 @@ def live_search(query: Query) -> Dict[str, Any]:
             "price_level": r.get("price_level"),
             "website": "",
             "maps_url": f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote(name + ' ' + (query.city or 'New York'))}",
+            "photos": photos
         }
         entry["links"] = build_links(name, dt, query.party_size, city_term=query.city or "New York")
         entry["_hotspot"] = _is_hotspot(name)
         top.append(entry)
 
-    # 2) Yelp for extra signal
     y_raw = yelp_search(query.q, query.city or "New York", limit=10, offset=0)
     y_results = y_raw.get("businesses", [])
     yelp_index = {b.get("name","").lower(): b for b in y_results}
-
-    # 3) Merge by name
     for e in top:
         y = yelp_index.get((e.get("name") or "").lower())
         if y:
@@ -494,21 +515,20 @@ def live_search(query: Query) -> Dict[str, Any]:
             e["yelp_url"] = y.get("url")
             e["yelp_price"] = y.get("price")
 
-    # 4) Rank by combined signals
     def score(e):
         g = e.get("rating") or 0
         gy = e.get("yelp_rating") or 0
         rc = (e.get("reviews") or 0) + (e.get("yelp_review_count") or 0)
         base = (g + gy) * (1 + (rc / 500.0))
         if e.get("_hotspot"):
-            base -= 4.0  # heavy demotion
+            base -= 4.0
         return base
 
     ranked = sorted(top, key=score, reverse=True)[:10]
     return {"mode": "live", "items": ranked, "count": len(ranked)}
 
 # -------------------------------------------------------------------
-# Concierge AI (Rezzie)
+# Concierge AI (same as before)
 # -------------------------------------------------------------------
 AIREZ_SYSTEM_PROMPT = """
 You are Rezzie — AiRez’s concierge assistant.
@@ -522,8 +542,7 @@ def _coerce_json(text: str) -> Tuple[dict, str]:
     raw = text.strip()
     if not raw.startswith("{"):
         m = re.search(r"\{[\s\S]*\}", raw)
-        if m:
-            raw = m.group(0)
+        if m: raw = m.group(0)
     try:
         obj = json.loads(raw)
         if not isinstance(obj, dict):
@@ -547,24 +566,13 @@ def _llm_concierge_reply(message: str, context: dict) -> dict:
         if not context.get("party"): need.append("party size")
         if not (context.get("date") and context.get("time")): need.append("date/time")
         ask = " and ".join(need) if need else "details"
-        return {
-            "reply": f"Happy to help. What {ask} should I use? I’ll pull bookable options.",
-            "actions": [],
-            "escalate": False,
-            "notes": "OPENAI_API_KEY missing; using stub"
-        }
+        return {"reply": f"Happy to help. What {ask} should I use? I’ll pull bookable options.", "actions": [], "escalate": False, "notes": "OPENAI_API_KEY missing; using stub"}
 
     msgs = [
         {"role": "system", "content": AIREZ_SYSTEM_PROMPT},
         {"role": "user", "content": f"Message: {message}\nContext: {json.dumps(context, ensure_ascii=False)}"},
     ]
-
-    resp = _openai_client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=msgs,
-        temperature=0.3,
-        max_tokens=600,
-    )
+    resp = _openai_client.chat.completions.create(model="gpt-4o-mini", messages=msgs, temperature=0.3, max_tokens=600)
     text = (resp.choices[0].message.content or "").strip()
     obj, _ = _coerce_json(text)
     return obj
@@ -581,12 +589,7 @@ def concierge_ai_chat(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
         result.setdefault("notes", "")
         return result
     except Exception as e:
-        return {
-            "reply": "I hit a snag reaching the concierge service. I can still show bookable times if you run a search.",
-            "actions": [],
-            "escalate": False,
-            "notes": f"ai_chat exception: {str(e)}"
-        }
+        return {"reply": "I hit a snag reaching the concierge service. I can still show bookable times if you run a search.", "actions": [], "escalate": False, "notes": f"ai_chat exception: {str(e)}"}
 
 @app.post("/concierge/handoff")
 def concierge_handoff(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
@@ -600,13 +603,11 @@ def concierge_handoff(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
     return {"ok": True, "routed_to": "local_mock"}
 
 # -------------------------------------------------------------------
-# Health + Static site (THIS MUST BE LAST)
+# Health + Static site
 # -------------------------------------------------------------------
 @app.get("/healthz", include_in_schema=False)
 def healthz():
     return {"ok": True}
 
-# Serve current folder as a site (index.html at "/")
-# Keep LAST so it doesn't shadow API routes.
 app.mount("/", StaticFiles(directory=".", html=True), name="site")
 
