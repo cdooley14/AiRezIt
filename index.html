@@ -27,9 +27,7 @@
       height: 64px; display: flex; align-items: center;
       padding: 0 18px; background: #fff; border-bottom: 1px solid var(--line);
     }
-    .nav .brand {
-      display:flex; align-items:center; gap:10px; font-weight:800;
-    }
+    .nav .brand { display:flex; align-items:center; gap:10px; font-weight:800; }
     .nav .brand img { width: 28px; height: 28px; border-radius: 6px; }
 
     main { max-width: 980px; margin: 18px auto 80px; padding: 0 16px; }
@@ -45,14 +43,8 @@
       border-radius: 14px;
       background: #fff;
     }
-    h1 {
-      font-size: clamp(28px, 4.2vw, 44px);
-      line-height: 1.14; margin: 0; font-weight: 900; letter-spacing: -0.015em;
-    }
-    .subtitle {
-      color: var(--muted); margin: 0 auto; max-width: 900px;
-      font-size: clamp(14px, 1.9vw, 16px);
-    }
+    h1 { font-size: clamp(28px, 4.2vw, 44px); line-height: 1.14; margin: 0; font-weight: 900; letter-spacing: -0.015em; }
+    .subtitle { color: var(--muted); margin: 0 auto; max-width: 900px; font-size: clamp(14px, 1.9vw, 16px); }
     .chips { display:flex; flex-wrap:wrap; gap:10px; justify-content:center; margin: 16px 0 22px; }
     .chip {
       font-size: 13px; background:#fff; border:1px solid var(--line); padding:8px 12px; border-radius:999px; cursor:default;
@@ -64,16 +56,9 @@
       background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
       box-shadow: var(--shadow); padding: 14px; margin: 0 auto 18px;
     }
-    .row {
-      display:grid; gap:10px;
-      grid-template-columns: 1.6fr 110px 160px 140px 180px 110px;
-    }
-    .row > * {
-      height: 42px; padding: 0 12px; border: 1px solid #e4e7ec; border-radius: 10px; outline: none; background:#fff;
-    }
-    .btn {
-      height: 42px; border:0; border-radius: 10px; background:#111; color:#fff; padding:0 16px; font-weight:700; cursor:pointer;
-    }
+    .row { display:grid; gap:10px; grid-template-columns: 1.6fr 110px 160px 140px 180px 110px; }
+    .row > * { height: 42px; padding: 0 12px; border: 1px solid #e4e7ec; border-radius: 10px; outline: none; background:#fff; }
+    .btn { height: 42px; border:0; border-radius: 10px; background:#111; color:#fff; padding:0 16px; font-weight:700; cursor:pointer; }
     .status { color: var(--muted); font-size: 13px; margin-top: 10px; }
     #aiNote { margin-top: 12px; color: #333; font-size: 14px; }
 
@@ -88,6 +73,11 @@
     .ratingLine { margin: 3px 0 6px; }
     .badge { display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; background:#f1f5ff; color:#2746ff; margin-left:8px; }
 
+    /* Load more */
+    #loadMoreWrap { display:flex; justify-content:center; margin: 18px 0 10px; }
+    #loadMore { display:none; padding:10px 16px; border:0; border-radius:10px; background:#0A61FF; color:#fff; font-weight:700; cursor:pointer; }
+    #loadMore[disabled] { opacity:.6; cursor:not-allowed; }
+
     /* Concierge floating widget */
     #concierge-btn {
       position: fixed; right: 18px; bottom: 18px; z-index: 900;
@@ -99,10 +89,7 @@
       width: 360px; max-height: 70vh; background:#fff; border:1px solid var(--line); border-radius:14px;
       display:none; flex-direction: column; overflow: hidden; box-shadow:0 18px 42px rgba(0,0,0,.28);
     }
-    #concierge-header {
-      padding:10px 12px; font-weight:800; border-bottom:1px solid var(--line);
-      display:flex; align-items:center; justify-content:space-between;
-    }
+    #concierge-header { padding:10px 12px; font-weight:800; border-bottom:1px solid var(--line); display:flex; align-items:center; justify-content:space-between; }
     #concierge-chat { padding: 10px 12px; overflow-y:auto; flex:1; }
     .msg { margin:8px 0; line-height:1.35; }
     .msg.ai { color:#111; }
@@ -188,6 +175,7 @@
     </div>
 
     <div id="results"></div>
+    <div id="loadMoreWrap"><button id="loadMore">Load more</button></div>
   </main>
 
   <!-- Floating Concierge -->
@@ -209,13 +197,14 @@
   <button id="concierge-btn">AI Concierge</button>
 
   <script>
-    // ====== Endpoints (works locally & on Render) ======
+    // ====== Endpoints ======
     const API_BASE =
       (location.hostname === "localhost" || location.hostname === "127.0.0.1")
         ? "http://127.0.0.1:8088"
         : ""; // same-origin on Render
 
-    const API_SEARCH  = API_BASE + "/live_search";
+    // Use the new cursor endpoint for everything (keeps /live_search available if you still need it elsewhere)
+    const API_CURSOR  = API_BASE + "/api/search";
     const API_AI      = API_BASE + "/concierge/ai_chat";
     const API_HANDOFF = API_BASE + "/concierge/handoff";
 
@@ -239,10 +228,24 @@
       };
     }
 
-    // ====== Search flow ======
+    // ====== Cursor search state ======
+    let cursor = null;     // opaque string from API
+    let isLoading = false; // throttle clicks
+    let lastQuery = "";    // to reset pagination on new searches
+    let lastCity  = "";
+
+    // ====== Search flow (first page + optional AI blurb) ======
     async function runSearch() {
       const ctx = ctxFromUI();
       const USE_AI_REPLY = $("#useAi").checked;
+
+      // if query/city changed, reset UI + cursor
+      if (ctx.q !== lastQuery || ctx.city !== lastCity) {
+        clearResults();
+        cursor = null;
+        lastQuery = ctx.q;
+        lastCity  = ctx.city;
+      }
 
       $("#status").textContent = "Searching…";
       $("#aiNote").textContent = "";
@@ -264,49 +267,71 @@
           } catch {}
         }
 
-        const res = await fetch(API_SEARCH, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            q: `${ctx.q} in ${ctx.city}`,
-            party_size: ctx.party,
-            date: ctx.date,
-            time: ctx.time,
-            city: ctx.city
-          })
-        });
-        const txt = await res.text();
-        let data;
-        try { data = JSON.parse(txt); }
-        catch { throw new Error("Bad JSON from API: " + txt.slice(0,200)); }
+        await loadBatch(true); // first page via cursor endpoint
 
         const dt = ((performance.now() - t0) / 1000).toFixed(1);
-        const items = data.items || data.results || (Array.isArray(data) ? data : []);
-        $("#status").textContent = `Mode: ${data.mode || "live"} • ${items.length} results • ${dt}s`;
-        render(items, ctx);
+        const count = document.querySelectorAll("#results .card").length;
+        $("#status").textContent = `Mode: cursor • ${count} shown • ${dt}s`;
+
       } catch (err) {
         $("#status").textContent = "";
         $("#aiNote").textContent = "";
-        $("#results").innerHTML = "";
+        clearResults();
         alert(err.message || "Search failed.");
       }
     }
 
-    function render(items, ctx) {
-      const root = $("#results");
-      root.innerHTML = "";
+    // ====== Load one page (10) using the cursor endpoint ======
+    async function loadBatch(isFirst=false) {
+      if (isLoading) return;
+      isLoading = true;
+      $("#loadMore").disabled = true;
 
-      if (!items.length) {
+      const params = new URLSearchParams({
+        q: lastQuery || $("#q").value.trim(),
+        city: lastCity || $("#where").value || "Manhattan"
+      });
+      if (cursor) params.set("cursor", cursor);
+
+      const res = await fetch(API_CURSOR + "?" + params.toString());
+      if (!res.ok) {
+        isLoading = false;
+        $("#loadMore").disabled = false;
+        throw new Error("Network error from /api/search");
+      }
+      const data = await res.json();
+      const items = Array.isArray(data.items) ? data.items : [];
+      if (isFirst) clearResults();
+      appendResults(items);
+
+      if (data.has_more && data.cursor) {
+        cursor = data.cursor;
+        $("#loadMore").style.display = "inline-block";
+        $("#loadMore").disabled = false;
+      } else {
+        cursor = null;
+        $("#loadMore").style.display = "none";
+      }
+
+      isLoading = false;
+    }
+
+    function clearResults() {
+      $("#results").innerHTML = "";
+    }
+
+    function appendResults(items) {
+      const root = $("#results");
+      if (!items.length && !root.children.length) {
         root.innerHTML = `
           <div class='muted'>
-            No matches in ${ctx.city} for that query. Try rewording your request
-            (e.g., “casual pasta”, “sushi omakase”, “private room bar for 50 in FiDi”),
+            No matches in ${lastCity || ($("#where").value || "your area")} for that query.
+            Try rewording (e.g., “casual pasta”, “sushi omakase”, “private room bar for 50 in FiDi”),
             or pick a nearby area.
           </div>`;
         return;
       }
-
-      root.innerHTML = items.map(x => {
+      const html = items.map(x => {
         const name = x.name || x.title || "Result";
         const address = x.address || "";
         const rating = x.rating ? `⭐ ${x.rating}` : "";
@@ -321,19 +346,39 @@
 
         return `
           <div class="card">
-            <div class="title">${name}${x._hotspot ? `<span class="badge">hype-prone</span>` : ""}</div>
+            <div class="title">${escapeHtml(name)}${x._hotspot ? `<span class="badge">hype-prone</span>` : ""}</div>
             <div class="ratingLine">${rating}${yelp}${price}${x.yelp_price ? ` • ${x.yelp_price}` : ""}</div>
-            <div class="muted">${address}</div>
+            <div class="muted">${escapeHtml(address)}</div>
             <div class="links" style="margin-top:8px;">${links.join(" | ") || "<span class='muted'>No links found</span>"}</div>
           </div>
         `;
       }).join("");
+      const wrap = document.createElement("div");
+      wrap.innerHTML = html;
+      // append nodes (keeps listeners intact elsewhere)
+      while (wrap.firstChild) root.appendChild(wrap.firstChild);
     }
 
-    $("#searchBtn").addEventListener("click", runSearch);
-    document.addEventListener("keydown", (e) => { if (e.key === "Enter") runSearch(); });
+    function escapeHtml(s) {
+      return String(s || '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#039;');
+    }
 
-    // ====== Concierge widget ======
+    // Wire up UI
+    $("#searchBtn").addEventListener("click", () => {
+      const ctx = ctxFromUI();
+      lastQuery = ctx.q;
+      lastCity = ctx.city;
+      runSearch();
+    });
+    document.addEventListener("keydown", (e) => { if (e.key === "Enter") { const ctx = ctxFromUI(); lastQuery=ctx.q; lastCity=ctx.city; runSearch(); } });
+    $("#loadMore").addEventListener("click", () => loadBatch(false));
+
+    // ====== Concierge widget (unchanged) ======
     const panel  = $("#concierge-panel");
     const chatEl = $("#concierge-chat");
     const input  = $("#concierge-text");
@@ -343,7 +388,6 @@
     const handoffArea = $("#handoff-area");
     const handoffBtn  = $("#handoff-btn");
     const contactEl   = $("#contact");
-
     const transcript = []; // {role:'user'|'assistant', text, at}
 
     function addMsg(text, who="ai") {
@@ -417,4 +461,5 @@
   </script>
 </body>
 </html>
+
 
